@@ -1,0 +1,139 @@
+from datetime import datetime, timedelta, timezone
+import time
+import threading
+
+class SmartApartment:
+    def __init__(self):
+        self.lights = False
+        self.gate_open = False
+        self.windows_open = False
+        self.blinds_open = False
+        self.washing_machine_running = False
+        self.dishwasher_running = False
+        self.temperature = 22  # Default room temperature
+        self.auto_blinds = False  # Automation flag
+
+    def current_time(self):
+        gmt3 = timezone(timedelta(hours=3))
+        return datetime.now(gmt3)
+
+    def time_str(self):
+        return self.current_time().strftime("%Y-%m-%d %H:%M:%S")
+
+    def toggle_lights(self):
+        self.lights = not self.lights
+        print(f"[{self.time_str()}] Lights turned {'ON' if self.lights else 'OFF'}.")
+
+    def toggle_gate(self):
+        self.gate_open = not self.gate_open
+        print(f"[{self.time_str()}] Gate is now {'OPEN' if self.gate_open else 'CLOSED'}.")
+
+    def toggle_windows(self):
+        self.windows_open = not self.windows_open
+        print(f"[{self.time_str()}] Windows are now {'OPEN' if self.windows_open else 'CLOSED'}.")
+
+    def toggle_blinds(self):
+        self.blinds_open = not self.blinds_open
+        print(f"[{self.time_str()}] Blinds are now {'OPEN' if self.blinds_open else 'CLOSED'}.")
+
+    def run_washing_machine(self):
+        if not self.washing_machine_running:
+            self.washing_machine_running = True
+            print(f"[{self.time_str()}] Washing machine started.")
+        else:
+            self.washing_machine_running = False
+            print(f"[{self.time_str()}] Washing machine stopped.")
+
+    def run_dishwasher(self):
+        if not self.dishwasher_running:
+            self.dishwasher_running = True
+            print(f"[{self.time_str()}] Dishwasher started.")
+        else:
+            self.dishwasher_running = False
+            print(f"[{self.time_str()}] Dishwasher stopped.")
+
+    def set_temperature(self, new_temp):
+        self.temperature = new_temp
+        print(f"[{self.time_str()}] Room temperature set to {self.temperature}°C.")
+
+    def auto_blinds_control(self):
+        """Continuously check time to open/close blinds."""
+        while True:
+            if self.auto_blinds:
+                now = self.current_time().time()
+                sunrise = datetime.strptime("06:30", "%H:%M").time()
+                sunset = datetime.strptime("18:30", "%H:%M").time()
+
+                if sunrise <= now <= (datetime.strptime("07:00", "%H:%M").time()) and not self.blinds_open:
+                    self.blinds_open = True
+                    print(f"[{self.time_str()}] 🌅 Sunrise detected - Blinds automatically OPENED.")
+
+                elif sunset <= now <= (datetime.strptime("19:00", "%H:%M").time()) and self.blinds_open:
+                    self.blinds_open = False
+                    print(f"[{self.time_str()}] 🌇 Sunset detected - Blinds automatically CLOSED.")
+            time.sleep(30)  # check every 30 seconds
+
+def main():
+    home = SmartApartment()
+
+    # Run auto-blinds control in background
+    threading.Thread(target=home.auto_blinds_control, daemon=True).start()
+
+    while True:
+        
+        print("\n--- STATUS ---")
+        print(f"Lights: {'ON' if home.lights else 'OFF'}")
+        print(f"Gate: {'OPEN' if home.gate_open else 'CLOSED'}")
+        print(f"Windows: {'OPEN' if home.windows_open else 'CLOSED'}")
+        print(f"Blinds: {'OPEN' if home.blinds_open else 'CLOSED'}")
+        print(f"Washing Machine: {'RUNNING' if home.washing_machine_running else 'OFF'}")
+        print(f"Dishwasher: {'RUNNING' if home.dishwasher_running else 'OFF'}")
+        print(f"Temperature: {home.temperature}°C")
+        print(f"Auto-Blinds: {'ENABLED' if home.auto_blinds else 'DISABLED'}")
+        print(f"Current Time: {home.time_str()}")
+
+        print("\n--- SMART APARTMENT MENU ---")
+
+        print("1. Toggle Lights")
+        print("2. Open/Close Gate")
+        print("3. Open/Close Windows")
+        print("4. Open/Close Blinds")
+        print("5. Start/Stop Washing Machine")
+        print("6. Start/Stop Dishwasher")
+        print("7. Set Room Temperature")
+        print("8. Enable/Disable Auto-Blinds")
+        print("9. end Simulation")
+
+
+        choice = input("Choose an option: ")
+
+        if choice == "1":
+            home.toggle_lights()
+        elif choice == "2":
+            home.toggle_gate()
+        elif choice == "3":
+            home.toggle_windows()
+        elif choice == "4":
+            home.toggle_blinds()
+        elif choice == "5":
+            home.run_washing_machine()
+        elif choice == "6":
+            home.run_dishwasher()
+        elif choice == "7":
+            try:
+                temp = float(input("Enter new temperature (°C): "))
+                home.set_temperature(temp)
+            except ValueError:
+                print("Invalid input. Please enter a number.")
+        elif choice == "8":
+            home.auto_blinds = not home.auto_blinds
+            print(f"Auto-blinds {'ENABLED' if home.auto_blinds else 'DISABLED'}.")
+        
+        elif choice == "9":
+            print("Exiting Smart Apartment Simulation. Goodbye!")
+            break
+        else:
+            print("Invalid choice. Please try again.")
+
+if __name__ == "__main__":
+    main()
