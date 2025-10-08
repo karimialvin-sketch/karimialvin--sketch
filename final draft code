@@ -1,0 +1,408 @@
+from datetime import datetime, timedelta, timezone
+import time
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import urllib.parse
+
+class SmartApartment:
+    def __init__(self):
+        self.lights = False
+        self.gate_open = False
+        self.windows_open = False
+        self.blinds_open = False
+        self.washing_machine_running = False
+        self.dishwasher_running = False
+        self.temperature = 22  # Default room temperature
+        self.auto_blinds = False  # Automation flag
+        self._http_server = None
+        self._http_thread = None
+
+    def current_time(self):
+        gmt3 = timezone(timedelta(hours=3))
+        return datetime.now(gmt3)
+
+    def time_str(self):
+        return self.current_time().strftime("%Y-%m-%d %H:%M:%S")
+
+    def toggle_lights(self):
+        self.lights = not self.lights
+        print(f"[{self.time_str()}] Lights turned {'ON' if self.lights else 'OFF'}.")
+
+    def toggle_gate(self):
+        self.gate_open = not self.gate_open
+        print(f"[{self.time_str()}] Gate is now {'OPEN' if self.gate_open else 'CLOSED'}.")
+
+    def toggle_windows(self):
+        self.windows_open = not self.windows_open
+        print(f"[{self.time_str()}] Windows are now {'OPEN' if self.windows_open else 'CLOSED'}.")
+
+    def toggle_blinds(self):
+        self.blinds_open = not self.blinds_open
+        print(f"[{self.time_str()}] Blinds are now {'OPEN' if self.blinds_open else 'CLOSED'}.")
+
+    def run_washing_machine(self):
+        if not self.washing_machine_running:
+            self.washing_machine_running = True
+            print(f"[{self.time_str()}] Washing machine started.")
+        else:
+            self.washing_machine_running = False
+            print(f"[{self.time_str()}] Washing machine stopped.")
+
+    def run_dishwasher(self):
+        if not self.dishwasher_running:
+            self.dishwasher_running = True
+            print(f"[{self.time_str()}] Dishwasher started.")
+        else:
+            self.dishwasher_running = False
+            print(f"[{self.time_str()}] Dishwasher stopped.")
+
+    def set_temperature(self, new_temp):
+        self.temperature = new_temp
+        print(f"[{self.time_str()}] Room temperature set to {self.temperature}°C.")
+
+    def auto_blinds_control(self):
+        """Continuously check time to open/close blinds."""
+        while True:
+            if self.auto_blinds:
+                now = self.current_time().time()
+                sunrise = datetime.strptime("06:30", "%H:%M").time()
+                sunset = datetime.strptime("18:30", "%H:%M").time()
+
+                if sunrise <= now <= (datetime.strptime("07:00", "%H:%M").time()) and not self.blinds_open:
+                    self.blinds_open = True
+                    print(f"[{self.time_str()}] 🌅 Sunrise detected - Blinds automatically OPENED.")
+
+                elif sunset <= now <= (datetime.strptime("19:00", "%H:%M").time()) and self.blinds_open:
+                    self.blinds_open = False
+                    print(f"[{self.time_str()}] 🌇 Sunset detected - Blinds automatically CLOSED.")
+            time.sleep(30)  # check every 30 seconds
+
+    def manual_toggle_blinds(self):
+        """Allow manual blinds toggle; if auto-blinds enabled ask to disable first."""
+        if self.auto_blinds:
+            ans = input("Auto-blinds is ENABLED. Disable auto-blinds to manually control blinds? (y/N): ").strip().lower()
+            if ans != "y":
+                print("Auto-blinds remains ENABLED. Manual action cancelled.")
+                return
+            self.auto_blinds = False
+            print("Auto-blinds DISABLED. Proceeding with manual control.")
+        self.toggle_blinds()
+
+    def toggle_auto_blinds(self):
+        self.auto_blinds = not self.auto_blinds
+        state = "ENABLED" if self.auto_blinds else "DISABLED"
+        print(f"Auto-blinds {state}.")
+        if self.auto_blinds:
+            # perform one immediate check to open/close blinds based on schedule
+            #automatic
+            now = self.current_time().time()
+            sunrise = datetime.strptime("06:30", "%H:%M").time()
+            sunrise_end = datetime.strptime("18:00", "%H:%M").time()
+            sunset = datetime.strptime("18:30", "%H:%M").time()
+            sunset_end = datetime.strptime("6:00", "%H:%M").time()
+
+            if sunrise <= now <= sunrise_end and not self.blinds_open:
+                self.blinds_open = True
+                print(f"[{self.time_str()}] 🌅 Auto-mode: Sunrise window — Blinds automatically OPENED.")
+            elif sunset <= now <= sunset_end and self.blinds_open:
+                self.blinds_open = False
+                print(f"[{self.time_str()}] 🌇 Auto-mode: Sunset window — Blinds automatically CLOSED.")
+            else:
+                print(f"[{self.time_str()}] Auto-mode active — no immediate blinds change required.")
+
+    def start_html_control_panel(self, host="localhost", port=8080):
+        if self._http_server is not None:
+            print(f"HTML control panel already running at http://{host}:{port}/")
+            return
+
+        apartment = self
+
+        class Handler(BaseHTTPRequestHandler):
+            # Simple session state (username) per connection
+            sessions = {}
+
+            def get_session_id(self):
+                cookie = self.headers.get("Cookie", "")
+                for part in cookie.split(";"):
+                    if part.strip().startswith("session_id="):
+                        return part.strip().split("=")[1]
+                return None
+
+            def set_session_cookie(self, session_id):
+                self.send_header("Set-Cookie", f"session_id={session_id}; Path=/")
+
+            def _html(self, body, set_cookie=None):
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                if set_cookie:
+                    self.set_session_cookie(set_cookie)
+                self.end_headers()
+                self.wfile.write(body.encode("utf-8"))
+
+            def do_GET(self):
+                session_id = self.get_session_id()
+                username = Handler.sessions.get(session_id)
+
+                # Apartment image background
+                bg_url = "https://amazingarchitecture.com/storage/9147/next-amani-tatu-city-spectrum.jpg"
+                style = f"""
+                <style>
+                body {{
+                    background-image: url('{bg_url}');
+                    background-size: cover;
+                    background-repeat: no-repeat;
+                    background-attachment: fixed;
+                    background-position: center;
+                    color: #222;
+                    font-family: Arial, sans-serif;
+                }}
+                .panel {{
+                    background: rgba(255,255,255,0.85);
+                    padding: 2em;
+                    max-width: 500px;
+                    margin: 3em auto;
+                    border-radius: 16px;
+                    box-shadow: 0 0 16px #888;
+                }}
+                h2, h3 {{ text-align: center; }}
+                </style>
+                """
+
+                # Combined login/status page flow
+                if not username:
+                    login_form = f"""
+                    <div class="panel">
+                    <h2>Smart Apartment Login</h2>
+                    <form method="post">
+                        <label>Username:</label>
+                        <input name="username" required autofocus/><br/><br/>
+                        <button name="action" value="login" style="background-color:green;color:white;">Login</button>
+                    </form>
+                    </div>
+                    """
+                    self._html(f"<html><head>{style}</head><body>{login_form}</body></html>")
+                    return
+
+                # Determine greeting based on current time
+                now = apartment.current_time().hour
+                if 5 <= now < 12:
+                    greeting = "Good morning"
+                elif 12 <= now < 18:
+                    greeting = "Good afternoon"
+                else:
+                    greeting = "Good evening"
+
+                status = f"""
+                <div class="panel">
+                <h2>Smart Apartment Status</h2>
+                <p>{greeting}, <b>{username}</b>!</p>
+                <ul>
+                  <li>Lights: {'ON' if apartment.lights else 'OFF'}</li>
+                  <li>Gate: {'OPEN' if apartment.gate_open else 'CLOSED'}</li>
+                  <li>Windows: {'OPEN' if apartment.windows_open else 'CLOSED'}</li>
+                  <li>Blinds: {'OPEN' if apartment.blinds_open else 'CLOSED'}</li>
+                  <li>Washing Machine: {'RUNNING' if apartment.washing_machine_running else 'OFF'}</li>
+                  <li>Dishwasher: {'RUNNING' if apartment.dishwasher_running else 'OFF'}</li>
+                  <li>Temperature: {apartment.temperature}°C</li>
+                  <li>Auto-Blinds: {'ENABLED' if apartment.auto_blinds else 'DISABLED'}</li>
+                  <li>Current Time: {apartment.time_str()}</li>
+                </ul>
+                """
+                controls = """
+                <h3>Controls</h3>
+                <form method="post">
+                  <button name="action" value="toggle_lights">Toggle Lights</button>
+                  <button name="action" value="toggle_gate">Toggle Gate</button>
+                  <button name="action" value="toggle_windows">Toggle Windows</button>
+                  <button name="action" value="manual_toggle_blinds">Open/Close Blinds</button>
+                  <button name="action" value="run_washing_machine">Start/Stop Washing Machine</button>
+                  <button name="action" value="run_dishwasher">Start/Stop Dishwasher</button>
+                  <input name="temperature" type="number" step="0.1" value="{temp}" style="width:60px"/>
+                  <button name="action" value="set_temperature">Set Room Temperature</button>
+                  <button name="action" value="toggle_auto_blinds">Enable/Disable Auto-Blinds</button>
+                  <button name="action" value="logout" style="background-color:orange;color:white;">Logout</button>
+                  <button name="action" value="exit_panel" style="background-color:red;color:white;">Exit HTML Panel</button>
+                </form>
+                </div>
+                """.format(temp=apartment.temperature)
+                self._html(f"<html><head>{style}</head><body>{status}{controls}</body></html>")
+
+            def do_POST(self):
+                length = int(self.headers.get("Content-Length", 0))
+                body = self.rfile.read(length).decode("utf-8")
+                params = urllib.parse.parse_qs(body)
+                action = params.get("action", [""])[0]
+                session_id = self.get_session_id()
+                username = Handler.sessions.get(session_id)
+
+                if action == "login":
+                    username_in = params.get("username", [""])[0].strip()
+                    if username_in:
+                        import uuid
+                        new_session = str(uuid.uuid4())
+                        Handler.sessions[new_session] = username_in
+                        # Loading transition page before redirect
+                        loading_html = """
+                        <html>
+                        <head>
+                        <meta http-equiv="refresh" content="1;url=/" />
+                        <style>
+                        body { text-align:center; font-family:Arial,sans-serif; background:#f8f8f8; }
+                        .loader {
+                            margin: 100px auto;
+                            border: 8px solid #f3f3f3;
+                            border-top: 8px solid #3498db;
+                            border-radius: 50%;
+                            width: 60px;
+                            height: 60px;
+                            animation: spin 1s linear infinite;
+                        }
+                        @keyframes spin {
+                            0% { transform: rotate(0deg);}
+                            100% { transform: rotate(360deg);}
+                        }
+                        </style>
+                        </head>
+                        <body>
+                        <div class="panel">
+                        <div class="loader"></div>
+                        <h2>Logging in...</h2>
+                        <p>Please wait while we load your Smart Apartment dashboard.</p>
+                        </div>
+                        </body>
+                        </html>
+                        """
+                        self._html(loading_html, set_cookie=new_session)
+                        return
+                    else:
+                        self._html("<html><body>Username required. <a href='/'>Try again</a></body></html>")
+                    return
+
+                # Only allow actions if logged in
+                if not username:
+                    self._html("<html><body>Please login first. <a href='/'>Login</a></body></html>")
+                    return
+
+                # ...existing actions...
+                if action == "toggle_lights":
+                    apartment.toggle_lights()
+                elif action == "toggle_gate":
+                    apartment.toggle_gate()
+                elif action == "toggle_windows":
+                    apartment.toggle_windows()
+                elif action == "manual_toggle_blinds":
+                    apartment.manual_toggle_blinds()
+                elif action == "run_washing_machine":
+                    apartment.run_washing_machine()
+                elif action == "run_dishwasher":
+                    apartment.run_dishwasher()
+                elif action == "set_temperature":
+                    try:
+                        temp = float(params.get("temperature", [str(apartment.temperature)])[0])
+                        apartment.set_temperature(temp)
+                    except ValueError:
+                        pass
+                elif action == "toggle_auto_blinds":
+                    apartment.toggle_auto_blinds()
+                elif action == "logout":
+                    if session_id in Handler.sessions:
+                        del Handler.sessions[session_id]
+                    self._html("<html><body>Logged out. <a href='/'>Login again</a></body></html>", set_cookie="expired")
+                    return
+                elif action == "exit_panel":
+                    self._html("<html><body><h2>HTML control panel stopped.</h2><p>You may close this tab.</p></body></html>")
+                    threading.Thread(target=apartment.stop_html_control_panel, daemon=True).start()
+                    return
+                # Redirect to GET for all other actions
+                if action != "exit_panel":
+                    self.send_response(303)
+                    self.send_header("Location", "/")
+                    self.end_headers()
+
+            def log_message(self, format, *args):
+                return
+
+        server = ThreadingHTTPServer((host, port), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        self._http_server = server
+        self._http_thread = thread
+        print(f"HTML control panel running at http://{host}:{port}/")
+
+    def stop_html_control_panel(self):
+        if self._http_server:
+            self._http_server.shutdown()
+            self._http_server.server_close()
+            self._http_server = None
+            self._http_thread = None
+            print("HTML control panel stopped.")
+
+def main():
+    home = SmartApartment()
+
+    # Start HTML control panel in background (default port 8080)
+    home.start_html_control_panel()
+    # Run auto-blinds control in background
+    threading.Thread(target=home.auto_blinds_control, daemon=True).start()
+
+    while True:
+        
+        print("\n--- STATUS ---")
+        print(f"Lights: {'ON' if home.lights else 'OFF'}")
+        print(f"Gate: {'OPEN' if home.gate_open else 'CLOSED'}")
+        print(f"Windows: {'OPEN' if home.windows_open else 'CLOSED'}")
+        print(f"Blinds: {'OPEN' if home.blinds_open else 'CLOSED'}")
+        print(f"Washing Machine: {'RUNNING' if home.washing_machine_running else 'OFF'}")
+        print(f"Dishwasher: {'RUNNING' if home.dishwasher_running else 'OFF'}")
+        print(f"Temperature: {home.temperature}°C")
+        print(f"Auto-Blinds: {'ENABLED' if home.auto_blinds else 'DISABLED'}")
+        print(f"Current Time: {home.time_str()}")
+
+        print("\n--- SMART APARTMENT MENU ---")
+        print("1. Toggle Lights")
+        print("2. Open/Close Gate")
+        print("3. Open/Close Windows")
+        print("4. Open/Close Blinds")
+        print("5. Start/Stop Washing Machine")
+        print("6. Start/Stop Dishwasher")
+        print("7. Set Room Temperature")
+        print("8. Enable/Disable Auto-Blinds")
+        print("9. end Simulation")
+
+
+        choice = input("Choose an option: ")
+
+        # ...existing choice handling...
+        if choice == "1":
+            home.toggle_lights()
+        elif choice == "2":
+            home.toggle_gate()
+        elif choice == "3":
+            home.toggle_windows()
+        elif choice == "4":
+            home.manual_toggle_blinds()
+        elif choice == "5":
+            home.run_washing_machine()
+        elif choice == "6":
+            home.run_dishwasher()
+        elif choice == "7":
+            try:
+                temp = float(input("Enter new temperature (°C): "))
+                home.set_temperature(temp)
+            except ValueError:
+                print("Invalid input. Please enter a number.")
+        elif choice == "8":
+            home.toggle_auto_blinds()
+        elif choice == "9":
+            print("Exiting Smart Apartment Simulation. Goodbye!")
+            home.stop_html_control_panel()
+            break
+        else:
+            print("Invalid choice. Please try again.")
+
+if __name__ == "__main__":
+    # Run HTML panel immediately when script starts
+    home = SmartApartment()
+    home.start_html_control_panel()
+    threading.Thread(target=home.auto_blinds_control, daemon=True).start()
+    main()
